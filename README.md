@@ -1,2 +1,2 @@
-# cmit-machine-control
+# cmit-explorer
 SDC Arduino project
