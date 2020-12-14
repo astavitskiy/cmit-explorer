@@ -9,16 +9,17 @@
 iarduino_Position_BMX055 sensor(BMX);
 
 unsigned long prevTime = 4000; // задаем паузу перед началом движения
-float course = 0.0; // задаем курс в градусах, по которому будем двигаться
-int target_speed = 200; // задаем скорость движения
+float prevCourse = 0.0; // задаем курс в градусах, по которому будем двигаться
+int target_speed = 100; // скорость движения
+int turnaround_speed = 90; // скорость разворота (минимальная)
 int minOut = 0;
-int maxOut = 255;
+int maxOut = 100;
  
 // параметры регулятора
-float kp = 15.0;
-float ki = 0.5;
-float kd = 0.0;
-int dt = 10;
+float kp = 5.0;
+float ki = 5.0;
+float kd = 5.0;
+int dt = 20;
 
 void setup() {
   Serial.begin(115200);
@@ -36,22 +37,26 @@ void loop() {
     sensor.read();
     float heading = sensor.axisZ;
 
-    // уточняем целевой курс
-    check_course(sensTime);
-
-    if (course == 180) {
-      if (heading > 170) heading -= 180;
-      if (heading < 0) heading += 180; 
+    // задаем курс
+    float course = get_course(sensTime);
+    
+    if (course != prevCourse) {
+      // разворот
+      turnaround(heading, course);   
+    }
+    else {
+      // едем прямо
+      course_control(heading, course);
     }
 
     Serial.print(sensTime); Serial.print(", ");
     Serial.print(heading); Serial.print(", ");
     Serial.print(course); Serial.print(", ");
     
-    // едем прямо
-    course_control(heading, course);
+
     
-    prevTime = sensTime;    
+    prevTime = sensTime;
+    prevCourse = course;    
   }
 
 }
@@ -73,33 +78,67 @@ int computePID(float input, float setpoint, float kp, float ki, float kd, float 
 
 // функция езды по прямой
 void course_control(float heading, float course){
-  
-  int regulator = computePID(heading, course, kp, ki, kd, dt, minOut, maxOut);
-  
-  if (heading > course) // подруливаем влево
-    {
-      analogWrite(FRONT_LEFT, constrain(target_speed - abs(regulator), minOut, maxOut));      
-      analogWrite(FRONT_RIGHT, constrain(target_speed + abs(regulator), minOut, maxOut));
+
+  int dir = 0; // направление подруливания: 1 = вправо, -1 = влево, 0 = ??? 
+  int regulator;
+  if ((course == 180.0) && (heading < -90)) { 
+    // для корректной работы регулятора heading должен быть больше курса на величину abs(heading) - course
+    regulator = computePID(course + (abs(heading) - course), course, kp, ki, kd, dt, minOut, maxOut);
+    dir = 1;    
+  }
+  else if ((course == -180.0) && (heading > 90)){
+    // для корректной работы регулятора heading должен быть меньше курса на величину abs(course) - heading
+    regulator = computePID(course - (abs(course) - heading), course, kp, ki, kd, dt, minOut, maxOut);
+    dir = -1;
+  }
+  else {
+    regulator = computePID(heading, course, kp, ki, kd, dt, minOut, maxOut);
+    if (heading > course) dir = -1; // готовимся подруливать влево
+    else if (heading < course) dir = 1; // готовимся подруливать вправо
+  }
+    
+  if (dir == -1) { // подруливаем влево 
+    analogWrite(FRONT_LEFT, constrain(target_speed - 0.5*abs(regulator), minOut, maxOut));      
+    analogWrite(FRONT_RIGHT, constrain(target_speed + 0.5*abs(regulator), minOut, maxOut));
+  }
+  else if (dir == 1) { // подруливаем вправо
+    analogWrite(FRONT_LEFT, constrain(target_speed + 0.5*abs(regulator), minOut, maxOut));
+    analogWrite(FRONT_RIGHT, constrain(target_speed - 0.5*abs(regulator), minOut, maxOut));
+  }
+
+  // отладка:
+  Serial.print(constrain(target_speed - abs(regulator), minOut, maxOut)); Serial.print(", ");
+  Serial.println(constrain(target_speed + abs(regulator), minOut, maxOut));// Serial.print(", ");
+}
+
+void turnaround(float heading, float course){
+  while(abs(heading - course) > 1.0){
+    if (abs(course) < 1){
+      // поворачиваем влево
+      analogWrite(FRONT_LEFT, 0);      
+      analogWrite(FRONT_RIGHT, turnaround_speed);
     }
-    else if (heading < course) // подруливаем вправо
-    {
-      analogWrite(FRONT_LEFT, constrain(target_speed + abs(regulator), minOut, maxOut));
-      analogWrite(FRONT_RIGHT, constrain(target_speed - abs(regulator), minOut, maxOut));
+    else if (abs(course)>179.0) {
+      // поворачиваем вправо
+      analogWrite(FRONT_LEFT, turnaround_speed);      
+      analogWrite(FRONT_RIGHT, 0);
     }
-    Serial.print(constrain(target_speed - abs(regulator), minOut, maxOut)); Serial.print(", ");
-    Serial.println(constrain(target_speed + abs(regulator), minOut, maxOut));// Serial.print(", ");
+    sensor.read();
+    heading = sensor.axisZ;
+
+    Serial.print(heading); Serial.print(", ");
+    Serial.println(course);// Serial.print(", ");
+  }
 }
 
 // функция целеуказания
-float check_course(unsigned long timer){
-    
-    if(abs(timer - 5000) < 100) {
-      course = 90.0;
-    }
+float get_course(unsigned long timer){
 
-    if(abs(timer - 10000) < 100) {
-      course = 180.0;      
-    }
+  float new_course;
+  
+  if ((timer / 5000) == 0) new_course = 0.0;
+  else new_course = 180.0;
+  Serial.print("nc=");Serial.print(new_course);
 
-    return course; 
+  return new_course;
 }
